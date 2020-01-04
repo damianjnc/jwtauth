@@ -4,6 +4,14 @@ const cookieParser = require('cookie-parser')
 const cors = require('cors')
 const { verify } = require('jsonwebtoken')
 const { hash, compare } = require('bcryptjs')
+const { fakeDB } = require('./fakeDB')
+const {
+    createAccessToken,
+    createRefreshToken,
+    sendAccessToken,
+    sendRefreshToken
+} = require('./tokens')
+const { isAuth } = require('./isAuth')
 
 // 1. Register a user
 // 2. Log in a user
@@ -27,18 +35,86 @@ server.use(express.urlencoded({
     extended: true
 })) //to support URL-encoded bodies
 
-server.listen(process.env.PORT, () => console.log('server is running on ' + process.env.PORT))
 
 // 1. Register a user
 server.post('/register', async (req, res) => {
     const { email, password } = req.body
 
     try{
-        //check if user exists
-
+        // 1. Check if user exists
+        const user = fakeDB.find(user => user.email === email)
+        if(user) throw new Error('User already registered')
+        // 2. If no user exists, hash the password
         const hashedPassword = await hash(password, 10)
-        console.log(hashedPassword)
-    }catch(err){
 
+        // 3. Save the user to the database
+        fakeDB.push({
+            id: fakeDB.length,
+            email,
+            password: hashedPassword
+        })
+        res.send('User created')
+        console.log(fakeDB)
+    }catch(err){
+        res.send({
+            error: `${err.message}`
+        })
     }
 })
+
+// 2. Log in the user
+server.post('/login', async(req, res) => {
+    try{
+        // 1. Find user in database, if it doesn't exist, send an error
+        const user = fakeDB.find(user => user.email === req.body.email)
+        if(!user) throw new Error('User not found')
+
+        // 2. Compare crypted password and send an error if it doesn't match
+        const valid = await compare(req.body.password, user.password)
+        if(!valid) throw new Error('Password invalid')
+
+        // 3. Create Refresh and access token
+        const accessToken = createAccessToken(user.id)
+        const refreshToken = createRefreshToken(user.id)
+
+        // 4. Put the refresh token in the db
+        user.refreshToken = refreshToken
+        console.log(fakeDB)
+
+        // 5. Send token, refreshtoken as a cookie, accesstoken as a res
+        sendRefreshToken(res, refreshToken)
+        sendAccessToken(req, res, accessToken)
+    } catch(err){
+        res.send({
+            error: `${err.message}`
+        })
+    }
+})
+
+// 3. Log out the user
+    server.post('/logout', (_req, res) => {
+        res.clearCookie('refreshtoken')
+        return res.send({
+            message: 'Logged out'
+        })
+    })
+
+// 4. Protected route
+    server.post('/protected', (req, res) => {
+        try{
+            const userId = isAuth(req)
+            if(userId !== null){
+                res.send({
+                    data: 'This is protected data'
+                })
+            }
+
+        } catch (e) {
+            res.send({
+                error: `${e.message}`
+            })
+
+        }
+    })
+
+server.listen(process.env.PORT, () => console.log('server is running on ' + process.env.PORT))
